@@ -6,6 +6,7 @@ Supporte les conversations multi-tours via le paramètre `history`.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -13,6 +14,15 @@ import anthropic
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# output_config.format (structured outputs natifs) n'est supporté que par une
+# liste restreinte de modèles Anthropic (Fable 5, Opus 5, Opus 4.8, Sonnet 5,
+# Haiku 4.5, Opus 4.5/4.1 legacy) — voir la doc Anthropic sur les structured
+# outputs. Fixé en dur plutôt qu'exposé en paramètre : tous les appelants de
+# `complete_structured` dans ce package font du scoring/classification léger,
+# jamais de génération créative, donc Haiku 4.5 convient systématiquement —
+# pas besoin de rendre ce choix configurable.
+STRUCTURED_MODEL = "claude-haiku-4-5"
 
 _client: anthropic.AsyncAnthropic | None = None
 
@@ -106,45 +116,30 @@ async def complete(
 
 async def complete_structured(
     user_prompt: str,
-    tool_name: str,
     input_schema: dict,
     system_prompt: str = "",
-    model: str = "claude-opus-4-6",
     max_tokens: int = 4096,
-    use_thinking: bool = False,
     cache_system: bool = True,
     history: list[dict] | None = None,
 ) -> dict:
-    """Force Claude à répondre via UN appel à `tool_name` (tool_choice forcé +
-    strict: true) — `input_schema` est validé côté serveur, `tool_call.input`
-    est déjà un dict Python parsé par le SDK. Jamais de JSON à parser/nettoyer
-    côté appelant (contrairement à `complete`, qui retourne du texte libre).
+    """Force une réponse JSON validée par schéma via `output_config.format` —
+    les structured outputs natifs de l'API Anthropic. Ni tool "bidon" ni
+    `tool_choice` forcé : le premier bloc texte de la réponse est déjà du JSON
+    garanti conforme à `input_schema`, jamais de nettoyage markdown-fence côté
+    appelant (contrairement à `complete`, qui retourne du texte libre).
 
-    `input_schema` doit avoir `additionalProperties: false` (exigence du
-    strict tool use — voir la doc Anthropic sur les structured outputs).
+    `input_schema` doit avoir `additionalProperties: false` (même exigence que
+    l'ancien strict tool use — voir la doc Anthropic sur les structured
+    outputs). Modèle fixé à `STRUCTURED_MODEL` (Haiku 4.5) — voir sa docstring.
     """
-    if use_thinking:
-        raise ValueError(
-            "complete_structured: use_thinking incompatible avec tool_choice forcé "
-            "(l'API Anthropic refuse la combinaison, 400) — laisse use_thinking=False."
-        )
     client = get_client()
-    kwargs = _build_kwargs(user_prompt, system_prompt, model, max_tokens, use_thinking, cache_system, history)
-    kwargs["tools"] = [{
-        "name": tool_name,
-        "description": f"Soumets le résultat structuré pour {tool_name}.",
-        "input_schema": input_schema,
-        "strict": True,
-    }]
-    kwargs["tool_choice"] = {"type": "tool", "name": tool_name}
+    kwargs = _build_kwargs(user_prompt, system_prompt, STRUCTURED_MODEL, max_tokens, False, cache_system, history)
+    kwargs["output_config"] = {"format": {"type": "json_schema", "schema": input_schema}}
 
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
 
-    tool_call = next(
-        (block for block in message.content if block.type == "tool_use" and block.name == tool_name),
-        None,
-    )
-    if tool_call is None:
-        raise RuntimeError(f"Claude n'a pas appelé le tool '{tool_name}' malgré tool_choice forcé")
-    return tool_call.input
+    text_block = next((block for block in message.content if block.type == "text"), None)
+    if text_block is None:
+        raise RuntimeError("complete_structured: aucun bloc texte dans la réponse (output_config.format)")
+    return json.loads(text_block.text)

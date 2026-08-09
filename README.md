@@ -15,10 +15,10 @@ briefs, headless analysis).
 LiteLLM covers 100+ providers generically. This package covers two, on
 purpose, and encodes production lessons instead of hiding them:
 
-- **Fails loud, never silently degrades.** `llm_complete_structured` (forced
-  tool-call output) raises `NotImplementedError` on providers that don't
-  support it, rather than falling back to unstructured text you'd have to
-  notice was different.
+- **Fails loud, never silently degrades.** `llm_complete_structured` (native
+  Anthropic structured outputs, `output_config.format`) raises
+  `NotImplementedError` on providers that don't support it, rather than
+  falling back to unstructured text you'd have to notice was different.
 - **Anthropic prompt caching wired in.** `cache_system=True` marks the system
   prompt `ephemeral` automatically.
 - **A specific httpx transport fix baked into the Anthropic client**
@@ -43,10 +43,11 @@ response = await llm_complete(
 )
 print(response.text, response.provider, response.model)
 
-# Forced structured output (Anthropic only, raises on other providers)
+# Native structured output (Anthropic only, raises on other providers).
+# Model is fixed to Haiku 4.5 internally — output_config.format only supports
+# a specific set of Anthropic models, not configurable per call.
 result = await llm_complete_structured(
     user_prompt="...",
-    tool_name="extract_fields",
     input_schema={...},
 )
 ```

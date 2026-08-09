@@ -207,7 +207,6 @@ async def test_llm_complete_structured_dispatches_to_anthropic(monkeypatch):
     schema = {"type": "object", "properties": {"nom": {"type": "string"}}}
     result = await router_mod.llm_complete_structured(
         user_prompt="extrait le nom",
-        tool_name="extract_name",
         input_schema=schema,
         provider_override="anthropic",
     )
@@ -215,8 +214,10 @@ async def test_llm_complete_structured_dispatches_to_anthropic(monkeypatch):
     assert result == {"nom": "Alice"}
     mock_structured.assert_awaited_once()
     _, kwargs = mock_structured.call_args
-    assert kwargs["tool_name"] == "extract_name"
     assert kwargs["input_schema"] == schema
+    # Pas de "model" transmis — anthropic_client.complete_structured fixe le
+    # modèle en dur (Haiku 4.5), llm_complete_structured n'a pas ce paramètre.
+    assert "model" not in kwargs
 
 
 @pytest.mark.asyncio
@@ -224,7 +225,6 @@ async def test_llm_complete_structured_openai_not_implemented():
     with pytest.raises(NotImplementedError):
         await router_mod.llm_complete_structured(
             user_prompt="x",
-            tool_name="t",
             input_schema={},
             provider_override="openai",
         )
@@ -234,6 +234,4 @@ async def test_llm_complete_structured_openai_not_implemented():
 async def test_llm_complete_structured_env_provider_openai_not_implemented(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     with pytest.raises(NotImplementedError):
-        await router_mod.llm_complete_structured(
-            user_prompt="x", tool_name="t", input_schema={}
-        )
+        await router_mod.llm_complete_structured(user_prompt="x", input_schema={})

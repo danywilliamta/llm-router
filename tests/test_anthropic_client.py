@@ -215,27 +215,14 @@ async def test_complete_forwards_build_kwargs_output_to_stream():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_complete_structured_rejects_thinking():
-    with pytest.raises(ValueError, match="use_thinking"):
-        await anthropic_client.complete_structured(
-            user_prompt="x",
-            tool_name="my_tool",
-            input_schema={},
-            use_thinking=True,
-        )
-
-
-@pytest.mark.asyncio
-async def test_complete_structured_returns_tool_input():
-    tool_block = SimpleNamespace(
-        type="tool_use", name="extract_name", input={"nom": "Alice"}
+async def test_complete_structured_parses_json_text_block():
+    message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text='{"nom": "Alice"}')]
     )
-    message = SimpleNamespace(content=[tool_block])
     anthropic_client._client = _fake_client_with_message(message)
 
     result = await anthropic_client.complete_structured(
         user_prompt="extrait le nom",
-        tool_name="extract_name",
         input_schema={"type": "object", "additionalProperties": False},
     )
 
@@ -243,48 +230,27 @@ async def test_complete_structured_returns_tool_input():
 
 
 @pytest.mark.asyncio
-async def test_complete_structured_builds_forced_tool_choice():
-    tool_block = SimpleNamespace(type="tool_use", name="my_tool", input={})
-    message = SimpleNamespace(content=[tool_block])
+async def test_complete_structured_forces_model_and_output_config():
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text="{}")])
     captured: dict = {}
     anthropic_client._client = _fake_client_with_message(message, captured)
 
     schema = {"type": "object", "additionalProperties": False}
-    await anthropic_client.complete_structured(
-        user_prompt="x", tool_name="my_tool", input_schema=schema
-    )
+    await anthropic_client.complete_structured(user_prompt="x", input_schema=schema)
 
-    assert captured["tool_choice"] == {"type": "tool", "name": "my_tool"}
-    assert captured["tools"] == [
-        {
-            "name": "my_tool",
-            "description": "Soumets le résultat structuré pour my_tool.",
-            "input_schema": schema,
-            "strict": True,
-        }
-    ]
-    # use_thinking=False par défaut pour complete_structured
+    # Le modèle est fixé en dur (Haiku 4.5) — jamais le défaut claude-opus-4-6
+    # de complete(), et pas un paramètre exposé à l'appelant.
+    assert captured["model"] == anthropic_client.STRUCTURED_MODEL
+    assert captured["output_config"] == {"format": {"type": "json_schema", "schema": schema}}
+    assert "tools" not in captured
+    assert "tool_choice" not in captured
     assert "thinking" not in captured
 
 
 @pytest.mark.asyncio
-async def test_complete_structured_ignores_tool_use_blocks_with_wrong_name():
-    other_tool = SimpleNamespace(type="tool_use", name="other_tool", input={"a": 1})
-    message = SimpleNamespace(content=[other_tool])
+async def test_complete_structured_raises_when_no_text_block_returned():
+    message = SimpleNamespace(content=[SimpleNamespace(type="thinking")])
     anthropic_client._client = _fake_client_with_message(message)
 
-    with pytest.raises(RuntimeError, match="my_tool"):
-        await anthropic_client.complete_structured(
-            user_prompt="x", tool_name="my_tool", input_schema={}
-        )
-
-
-@pytest.mark.asyncio
-async def test_complete_structured_raises_when_no_tool_call_returned():
-    message = SimpleNamespace(content=[SimpleNamespace(type="text", text="pas de tool")])
-    anthropic_client._client = _fake_client_with_message(message)
-
-    with pytest.raises(RuntimeError, match="my_tool"):
-        await anthropic_client.complete_structured(
-            user_prompt="x", tool_name="my_tool", input_schema={}
-        )
+    with pytest.raises(RuntimeError, match="output_config.format"):
+        await anthropic_client.complete_structured(user_prompt="x", input_schema={})

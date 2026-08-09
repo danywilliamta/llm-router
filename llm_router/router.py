@@ -117,24 +117,25 @@ async def llm_complete(
 
 async def llm_complete_structured(
     user_prompt: str,
-    tool_name: str,
     input_schema: dict,
     system_prompt: str = "",
-    model: str | None = None,
     max_tokens: int = 4096,
-    use_thinking: bool = False,
     cache_system: bool = True,
     history: list[dict] | None = None,
     provider_override: str | None = None,
 ) -> dict:
-    """Équivalent structuré de `llm_complete` : force un tool call validé par
-    schéma plutôt que du texte libre — voir `anthropic_client.complete_structured`.
-    Anthropic uniquement pour l'instant (tool_choice forcé + strict n'est pas
-    câblé côté OpenAI dans ce package) — échoue explicitement plutôt que de
-    silencieusement retomber sur un comportement différent.
+    """Équivalent structuré de `llm_complete` : réponse JSON validée par schéma
+    via les structured outputs natifs de l'API Anthropic (`output_config.format`)
+    — voir `anthropic_client.complete_structured`. Anthropic uniquement pour
+    l'instant (pas câblé côté OpenAI dans ce package) — échoue explicitement
+    plutôt que de silencieusement retomber sur un comportement différent.
+
+    Pas de paramètre `model` : `anthropic_client.complete_structured` fixe le
+    modèle en dur (Haiku 4.5) — `output_config.format` n'est supporté que par
+    une liste restreinte de modèles Anthropic, et Haiku 4.5 couvre tous les
+    usages actuels de cette fonction.
     """
     provider = _get_provider(provider_override)
-    resolved_model = model or _default_model(provider)
 
     if provider != "anthropic":
         raise NotImplementedError(
@@ -144,12 +145,9 @@ async def llm_complete_structured(
     from llm_router import anthropic_client
     return await anthropic_client.complete_structured(
         user_prompt=user_prompt,
-        tool_name=tool_name,
         input_schema=input_schema,
         system_prompt=system_prompt,
-        model=resolved_model,
         max_tokens=max_tokens,
-        use_thinking=use_thinking,
         cache_system=cache_system,
         history=history,
     )
