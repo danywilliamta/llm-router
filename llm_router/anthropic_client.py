@@ -62,6 +62,26 @@ def get_client() -> anthropic.AsyncAnthropic:
     return _client
 
 
+async def _report_usage(*, model: str, message, usage_context: dict | None) -> None:
+    """Extract token usage from a completed `Message` and forward it to the
+    usage hook, if one is registered. Deliberately fails soft — a malformed
+    or missing `.usage` (e.g. an older/mocked SDK response) must never break
+    the completion this usage was for. See `llm_router.usage` for the hook
+    contract itself, which has the same swallow-and-log guarantee for the
+    hook's own body; this covers the extraction step ahead of it."""
+    try:
+        usage = message.usage
+        await emit(UsageEvent(
+            provider="anthropic",
+            model=model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            context=usage_context or {},
+        ))
+    except Exception:
+        logger.exception("failed to extract/report usage for model=%s", model)
+
+
 def _build_kwargs(
     user_prompt: str,
     system_prompt: str,
@@ -109,13 +129,7 @@ async def complete(
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
 
-    await emit(UsageEvent(
-        provider="anthropic",
-        model=model,
-        input_tokens=message.usage.input_tokens,
-        output_tokens=message.usage.output_tokens,
-        context=usage_context or {},
-    ))
+    await _report_usage(model=model, message=message, usage_context=usage_context)
 
     parts = [
         block.text
@@ -151,13 +165,7 @@ async def complete_structured(
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
 
-    await emit(UsageEvent(
-        provider="anthropic",
-        model=STRUCTURED_MODEL,
-        input_tokens=message.usage.input_tokens,
-        output_tokens=message.usage.output_tokens,
-        context=usage_context or {},
-    ))
+    await _report_usage(model=STRUCTURED_MODEL, message=message, usage_context=usage_context)
 
     text_block = next((block for block in message.content if block.type == "text"), None)
     if text_block is None:

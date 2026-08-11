@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import llm_router.anthropic_client as anthropic_client
+import llm_router.usage as usage
 
 
 class FakeStream:
@@ -254,3 +255,137 @@ async def test_complete_structured_raises_when_no_text_block_returned():
 
     with pytest.raises(RuntimeError, match="output_config.format"):
         await anthropic_client.complete_structured(user_prompt="x", input_schema={})
+
+
+# ---------------------------------------------------------------------------
+# usage hook reporting
+# ---------------------------------------------------------------------------
+
+def _fake_message_with_usage(text: str, input_tokens: int, output_tokens: int):
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_reports_usage_to_registered_hook():
+    message = _fake_message_with_usage("ok", input_tokens=123, output_tokens=45)
+    anthropic_client._client = _fake_client_with_message(message)
+
+    received: list[usage.UsageEvent] = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        received.append(event)
+
+    usage.set_usage_hook(hook)
+
+    await anthropic_client.complete(
+        user_prompt="salut",
+        model="claude-opus-4-6",
+        usage_context={"agent_id": "alex_claims_validator", "tenant_id": "ws-1"},
+    )
+
+    assert len(received) == 1
+    event = received[0]
+    assert event.provider == "anthropic"
+    assert event.model == "claude-opus-4-6"
+    assert event.input_tokens == 123
+    assert event.output_tokens == 45
+    assert event.context == {"agent_id": "alex_claims_validator", "tenant_id": "ws-1"}
+
+
+@pytest.mark.asyncio
+async def test_complete_reports_usage_with_empty_context_by_default():
+    message = _fake_message_with_usage("ok", input_tokens=1, output_tokens=1)
+    anthropic_client._client = _fake_client_with_message(message)
+
+    received: list[usage.UsageEvent] = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        received.append(event)
+
+    usage.set_usage_hook(hook)
+
+    await anthropic_client.complete(user_prompt="salut")
+
+    assert received[0].context == {}
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_reports_usage_with_structured_model():
+    # complete_structured has no `model` param — the reported model must be
+    # STRUCTURED_MODEL (Haiku 4.5), never the caller's default/override.
+    message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="{}")],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=2),
+    )
+    anthropic_client._client = _fake_client_with_message(message)
+
+    received: list[usage.UsageEvent] = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        received.append(event)
+
+    usage.set_usage_hook(hook)
+
+    await anthropic_client.complete_structured(
+        user_prompt="x",
+        input_schema={"type": "object", "additionalProperties": False},
+        usage_context={"agent_id": "alex_brand_voice"},
+    )
+
+    assert len(received) == 1
+    assert received[0].model == anthropic_client.STRUCTURED_MODEL
+    assert received[0].input_tokens == 10
+    assert received[0].output_tokens == 2
+    assert received[0].context == {"agent_id": "alex_brand_voice"}
+
+
+@pytest.mark.asyncio
+async def test_complete_does_not_call_hook_when_none_registered():
+    # No hook registered (conftest resets between tests) — complete() must
+    # still return normally, usage reporting is silently skipped.
+    message = _fake_message_with_usage("ok", input_tokens=1, output_tokens=1)
+    anthropic_client._client = _fake_client_with_message(message)
+
+    result = await anthropic_client.complete(user_prompt="salut")
+
+    assert result == "ok"
+
+
+@pytest.mark.asyncio
+async def test_complete_survives_message_without_usage_attribute():
+    # Regression guard: older/mocked responses lacking `.usage` entirely (as
+    # every fake message elsewhere in this file does) must not break
+    # `complete()` even with a hook registered — extraction failure is
+    # swallowed, not propagated. See anthropic_client._report_usage.
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    anthropic_client._client = _fake_client_with_message(message)
+
+    hook_calls = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        hook_calls.append(event)
+
+    usage.set_usage_hook(hook)
+
+    result = await anthropic_client.complete(user_prompt="salut")
+
+    assert result == "ok"
+    assert hook_calls == []
+
+
+@pytest.mark.asyncio
+async def test_complete_survives_a_hook_that_raises():
+    message = _fake_message_with_usage("ok", input_tokens=1, output_tokens=1)
+    anthropic_client._client = _fake_client_with_message(message)
+
+    async def broken_hook(event: usage.UsageEvent) -> None:
+        raise RuntimeError("simulated DB failure")
+
+    usage.set_usage_hook(broken_hook)
+
+    result = await anthropic_client.complete(user_prompt="salut")
+
+    assert result == "ok"

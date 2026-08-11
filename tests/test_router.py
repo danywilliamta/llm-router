@@ -235,3 +235,65 @@ async def test_llm_complete_structured_env_provider_openai_not_implemented(monke
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     with pytest.raises(NotImplementedError):
         await router_mod.llm_complete_structured(user_prompt="x", input_schema={})
+
+
+# ---------------------------------------------------------------------------
+# usage_context — threading jusqu'au client (pas d'interprétation ici, voir
+# test_usage.py + test_anthropic_client.py/test_openai_client.py pour le
+# comportement du hook lui-même)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_llm_complete_forwards_usage_context_to_anthropic_client(monkeypatch):
+    mock_complete = AsyncMock(return_value="x")
+    monkeypatch.setattr(anthropic_client, "complete", mock_complete)
+    context = {"agent_id": "claire_daily_brief", "tenant_id": "ws-1"}
+
+    await router_mod.llm_complete(
+        user_prompt="hi", provider_override="anthropic", usage_context=context
+    )
+
+    _, kwargs = mock_complete.call_args
+    assert kwargs["usage_context"] == context
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_forwards_usage_context_to_openai_client(monkeypatch):
+    mock_complete = AsyncMock(return_value="x")
+    monkeypatch.setattr(openai_client, "complete", mock_complete)
+    context = {"agent_id": "brand_brain_importer"}
+
+    await router_mod.llm_complete(
+        user_prompt="hi", provider_override="openai", usage_context=context
+    )
+
+    _, kwargs = mock_complete.call_args
+    assert kwargs["usage_context"] == context
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_usage_context_defaults_to_none(monkeypatch):
+    mock_complete = AsyncMock(return_value="x")
+    monkeypatch.setattr(anthropic_client, "complete", mock_complete)
+
+    await router_mod.llm_complete(user_prompt="hi", provider_override="anthropic")
+
+    _, kwargs = mock_complete.call_args
+    assert kwargs["usage_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_structured_forwards_usage_context(monkeypatch):
+    mock_structured = AsyncMock(return_value={})
+    monkeypatch.setattr(anthropic_client, "complete_structured", mock_structured)
+    context = {"agent_id": "alex_claims_validator", "tenant_id": "ws-1"}
+
+    await router_mod.llm_complete_structured(
+        user_prompt="x",
+        input_schema={},
+        provider_override="anthropic",
+        usage_context=context,
+    )
+
+    _, kwargs = mock_structured.call_args
+    assert kwargs["usage_context"] == context

@@ -18,6 +18,15 @@ def _reset_client_singletons(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_usage_hook():
+    import llm_router.usage as usage
+
+    usage.set_usage_hook(None)
+    yield
+    usage.set_usage_hook(None)
+
+
+@pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for var in (
         "LLM_PROVIDER",

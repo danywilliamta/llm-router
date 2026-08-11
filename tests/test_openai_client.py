@@ -12,17 +12,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import llm_router.openai_llm_client as openai_client
+import llm_router.usage as usage
 
 
-def _fake_response(content: str | None):
+def _fake_response(content: str | None, usage_obj=None):
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=usage_obj,
     )
 
 
-def _fake_client(content: str | None = "ok"):
+def _fake_client(content: str | None = "ok", usage_obj=None):
     client = MagicMock()
-    client.chat.completions.create = AsyncMock(return_value=_fake_response(content))
+    client.chat.completions.create = AsyncMock(return_value=_fake_response(content, usage_obj))
     return client
 
 
@@ -114,3 +116,78 @@ async def test_complete_uses_default_model_and_max_tokens():
     _, kwargs = client.chat.completions.create.call_args
     assert kwargs["model"] == "gpt-4o"
     assert kwargs["max_tokens"] == 4096
+
+
+# ---------------------------------------------------------------------------
+# usage hook reporting
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_complete_reports_usage_to_registered_hook():
+    usage_obj = SimpleNamespace(prompt_tokens=80, completion_tokens=15)
+    openai_client._client = _fake_client("bonjour", usage_obj=usage_obj)
+
+    received: list[usage.UsageEvent] = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        received.append(event)
+
+    usage.set_usage_hook(hook)
+
+    await openai_client.complete(
+        user_prompt="salut",
+        model="gpt-4o-mini",
+        usage_context={"agent_id": "brand_brain_importer", "tenant_id": "ws-1"},
+    )
+
+    assert len(received) == 1
+    event = received[0]
+    assert event.provider == "openai"
+    assert event.model == "gpt-4o-mini"
+    assert event.input_tokens == 80
+    assert event.output_tokens == 15
+    assert event.context == {"agent_id": "brand_brain_importer", "tenant_id": "ws-1"}
+
+
+@pytest.mark.asyncio
+async def test_complete_does_not_call_hook_when_usage_is_none():
+    # OpenAI response with usage=None (e.g. streaming without usage tracking
+    # enabled) — must not raise, must simply skip reporting.
+    openai_client._client = _fake_client("bonjour", usage_obj=None)
+
+    received: list[usage.UsageEvent] = []
+
+    async def hook(event: usage.UsageEvent) -> None:
+        received.append(event)
+
+    usage.set_usage_hook(hook)
+
+    result = await openai_client.complete(user_prompt="salut")
+
+    assert result == "bonjour"
+    assert received == []
+
+
+@pytest.mark.asyncio
+async def test_complete_does_not_call_hook_when_none_registered():
+    usage_obj = SimpleNamespace(prompt_tokens=1, completion_tokens=1)
+    openai_client._client = _fake_client("bonjour", usage_obj=usage_obj)
+
+    result = await openai_client.complete(user_prompt="salut")
+
+    assert result == "bonjour"
+
+
+@pytest.mark.asyncio
+async def test_complete_survives_a_hook_that_raises():
+    usage_obj = SimpleNamespace(prompt_tokens=1, completion_tokens=1)
+    openai_client._client = _fake_client("bonjour", usage_obj=usage_obj)
+
+    async def broken_hook(event: usage.UsageEvent) -> None:
+        raise RuntimeError("simulated failure")
+
+    usage.set_usage_hook(broken_hook)
+
+    result = await openai_client.complete(user_prompt="salut")
+
+    assert result == "bonjour"

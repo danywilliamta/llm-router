@@ -49,13 +49,24 @@ async def complete(
         max_tokens=max_tokens,
     )
 
-    if response.usage is not None:
+    await _report_usage(model=model, response=response, usage_context=usage_context)
+
+    return response.choices[0].message.content or ""
+
+
+async def _report_usage(*, model: str, response, usage_context: dict | None) -> None:
+    """See `anthropic_client._report_usage` — same fail-soft contract:
+    extracting usage must never break the completion it's reporting on."""
+    try:
+        usage = response.usage
+        if usage is None:
+            return
         await emit(UsageEvent(
             provider="openai",
             model=model,
-            input_tokens=response.usage.prompt_tokens,
-            output_tokens=response.usage.completion_tokens,
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
             context=usage_context or {},
         ))
-
-    return response.choices[0].message.content or ""
+    except Exception:
+        logger.exception("failed to extract/report usage for model=%s", model)
