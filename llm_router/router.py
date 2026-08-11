@@ -67,6 +67,7 @@ async def llm_complete(
     cache_system: bool = True,
     history: list[dict] | None = None,
     provider_override: str | None = None,
+    usage_context: dict | None = None,
     **extra_kwargs,
 ) -> LLMResponse:
     """
@@ -80,6 +81,10 @@ async def llm_complete(
         use_thinking:     Adaptive thinking (Anthropic uniquement, ignoré ailleurs).
         cache_system:     Prompt caching sur le system_prompt (Anthropic uniquement).
         provider_override: Force un provider spécifique pour cet appel.
+        usage_context:    Transmis tel quel au hook enregistré via `set_usage_hook`
+                           (voir `llm_router.usage`) — ignoré si aucun hook n'est
+                           configuré. Sert à identifier l'appelant (agent_id,
+                           tenant_id, user_id...) pour l'accounting côté appelant.
         **extra_kwargs:   Paramètres additionnels transmis au client.
     """
     provider = _get_provider(provider_override)
@@ -95,6 +100,7 @@ async def llm_complete(
             use_thinking=use_thinking,
             cache_system=cache_system,
             history=history,
+            usage_context=usage_context,
         )
         return LLMResponse(
             text=text,
@@ -111,6 +117,7 @@ async def llm_complete(
         model=resolved_model,
         max_tokens=max_tokens,
         history=history,
+        usage_context=usage_context,
     )
     return LLMResponse(text=text, model=resolved_model, provider="openai")
 
@@ -123,6 +130,7 @@ async def llm_complete_structured(
     cache_system: bool = True,
     history: list[dict] | None = None,
     provider_override: str | None = None,
+    usage_context: dict | None = None,
 ) -> dict:
     """Équivalent structuré de `llm_complete` : réponse JSON validée par schéma
     via les structured outputs natifs de l'API Anthropic (`output_config.format`)
@@ -134,6 +142,9 @@ async def llm_complete_structured(
     modèle en dur (Haiku 4.5) — `output_config.format` n'est supporté que par
     une liste restreinte de modèles Anthropic, et Haiku 4.5 couvre tous les
     usages actuels de cette fonction.
+
+    `usage_context` : voir `llm_complete` — transmis tel quel au hook de
+    tracking optionnel (`llm_router.usage.set_usage_hook`).
     """
     provider = _get_provider(provider_override)
 
@@ -150,4 +161,5 @@ async def llm_complete_structured(
         max_tokens=max_tokens,
         cache_system=cache_system,
         history=history,
+        usage_context=usage_context,
     )

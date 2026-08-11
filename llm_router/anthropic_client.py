@@ -13,6 +13,8 @@ import os
 import anthropic
 import httpx
 
+from llm_router.usage import UsageEvent, emit
+
 logger = logging.getLogger(__name__)
 
 # output_config.format (structured outputs natifs) n'est supporté que par une
@@ -99,12 +101,21 @@ async def complete(
     use_thinking: bool = True,
     cache_system: bool = True,
     history: list[dict] | None = None,
+    usage_context: dict | None = None,
 ) -> str:
     client = get_client()
     kwargs = _build_kwargs(user_prompt, system_prompt, model, max_tokens, use_thinking, cache_system, history)
 
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
+
+    await emit(UsageEvent(
+        provider="anthropic",
+        model=model,
+        input_tokens=message.usage.input_tokens,
+        output_tokens=message.usage.output_tokens,
+        context=usage_context or {},
+    ))
 
     parts = [
         block.text
@@ -121,6 +132,7 @@ async def complete_structured(
     max_tokens: int = 4096,
     cache_system: bool = True,
     history: list[dict] | None = None,
+    usage_context: dict | None = None,
 ) -> dict:
     """Force une réponse JSON validée par schéma via `output_config.format` —
     les structured outputs natifs de l'API Anthropic. Ni tool "bidon" ni
@@ -138,6 +150,14 @@ async def complete_structured(
 
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
+
+    await emit(UsageEvent(
+        provider="anthropic",
+        model=STRUCTURED_MODEL,
+        input_tokens=message.usage.input_tokens,
+        output_tokens=message.usage.output_tokens,
+        context=usage_context or {},
+    ))
 
     text_block = next((block for block in message.content if block.type == "text"), None)
     if text_block is None:

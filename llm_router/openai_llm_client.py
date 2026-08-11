@@ -10,6 +10,8 @@ import os
 
 import openai
 
+from llm_router.usage import UsageEvent, emit
+
 logger = logging.getLogger(__name__)
 
 _client: openai.AsyncOpenAI | None = None
@@ -31,6 +33,7 @@ async def complete(
     model: str = "gpt-4o",
     max_tokens: int = 4096,
     history: list[dict] | None = None,
+    usage_context: dict | None = None,
     **_kwargs,
 ) -> str:
     client = get_client()
@@ -45,4 +48,14 @@ async def complete(
         messages=messages,
         max_tokens=max_tokens,
     )
+
+    if response.usage is not None:
+        await emit(UsageEvent(
+            provider="openai",
+            model=model,
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens,
+            context=usage_context or {},
+        ))
+
     return response.choices[0].message.content or ""
