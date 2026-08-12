@@ -283,6 +283,39 @@ async def test_llm_complete_usage_context_defaults_to_none(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_llm_complete_forwards_images_to_anthropic_client(monkeypatch):
+    mock_complete = AsyncMock(return_value="x")
+    monkeypatch.setattr(anthropic_client, "complete", mock_complete)
+    images = [(b"fake-bytes", "image/png")]
+
+    await router_mod.llm_complete(
+        user_prompt="hi", provider_override="anthropic", images=images
+    )
+
+    _, kwargs = mock_complete.call_args
+    assert kwargs["images"] == images
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_images_under_openai_raises():
+    with pytest.raises(NotImplementedError, match="openai"):
+        await router_mod.llm_complete(
+            user_prompt="hi",
+            provider_override="openai",
+            images=[(b"fake-bytes", "image/png")],
+        )
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_without_images_does_not_raise_under_openai(monkeypatch):
+    monkeypatch.setattr(openai_client, "complete", AsyncMock(return_value="x"))
+
+    response = await router_mod.llm_complete(user_prompt="hi", provider_override="openai")
+
+    assert response.text == "x"
+
+
+@pytest.mark.asyncio
 async def test_llm_complete_structured_forwards_usage_context(monkeypatch):
     mock_structured = AsyncMock(return_value={})
     monkeypatch.setattr(anthropic_client, "complete_structured", mock_structured)

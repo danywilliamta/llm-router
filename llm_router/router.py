@@ -68,6 +68,7 @@ async def llm_complete(
     history: list[dict] | None = None,
     provider_override: str | None = None,
     usage_context: dict | None = None,
+    images: list[tuple[bytes, str]] | None = None,
     **extra_kwargs,
 ) -> LLMResponse:
     """
@@ -85,6 +86,10 @@ async def llm_complete(
                            (voir `llm_router.usage`) — ignoré si aucun hook n'est
                            configuré. Sert à identifier l'appelant (agent_id,
                            tenant_id, user_id...) pour l'accounting côté appelant.
+        images:           Liste de (bytes, media_type) à joindre au message utilisateur
+                           (vision). Anthropic uniquement pour l'instant — lève
+                           `NotImplementedError` sous provider='openai' plutôt que de
+                           silencieusement ignorer les images (voir openai_llm_client).
         **extra_kwargs:   Paramètres additionnels transmis au client.
     """
     provider = _get_provider(provider_override)
@@ -101,6 +106,7 @@ async def llm_complete(
             cache_system=cache_system,
             history=history,
             usage_context=usage_context,
+            images=images,
         )
         return LLMResponse(
             text=text,
@@ -109,7 +115,15 @@ async def llm_complete(
             cached=cache_system and bool(system_prompt),
         )
 
-    # openai
+    # openai — pas de support vision dans openai_llm_client aujourd'hui ; échoue
+    # explicitement plutôt que de silencieusement laisser tomber les images
+    # (même principe que llm_complete_structured sous provider='openai').
+    if images:
+        raise NotImplementedError(
+            f"llm_complete(images=...) non implémenté pour provider='{provider}' "
+            "(vision Anthropic uniquement pour l'instant)"
+        )
+
     from llm_router import openai_llm_client
     text = await openai_llm_client.complete(
         user_prompt=user_prompt,

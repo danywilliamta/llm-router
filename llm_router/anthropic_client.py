@@ -6,6 +6,7 @@ Supporte les conversations multi-tours via le paramètre `history`.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -90,6 +91,7 @@ def _build_kwargs(
     use_thinking: bool,
     cache_system: bool,
     history: list[dict] | None = None,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> dict:
     system_content: list[dict] = []
     if system_prompt:
@@ -98,8 +100,28 @@ def _build_kwargs(
             block["cache_control"] = {"type": "ephemeral"}
         system_content.append(block)
 
+    # `images` : liste de (bytes, media_type), injectées en blocs "image" avant
+    # le texte dans le même message utilisateur — jamais un message séparé (les
+    # rôles doivent alterner strictement côté API Anthropic). Content reste une
+    # simple str quand `images` est vide/None, comportement identique à avant
+    # l'ajout de ce paramètre (aucun appelant existant n'est affecté).
+    if images:
+        user_content: str | list[dict] = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.b64encode(data).decode("utf-8"),
+                },
+            }
+            for data, media_type in images
+        ] + [{"type": "text", "text": user_prompt}]
+    else:
+        user_content = user_prompt
+
     # Historique + nouveau message utilisateur
-    messages = list(history or []) + [{"role": "user", "content": user_prompt}]
+    messages = list(history or []) + [{"role": "user", "content": user_content}]
 
     kwargs: dict = {
         "model": model,
@@ -122,9 +144,10 @@ async def complete(
     cache_system: bool = True,
     history: list[dict] | None = None,
     usage_context: dict | None = None,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> str:
     client = get_client()
-    kwargs = _build_kwargs(user_prompt, system_prompt, model, max_tokens, use_thinking, cache_system, history)
+    kwargs = _build_kwargs(user_prompt, system_prompt, model, max_tokens, use_thinking, cache_system, history, images)
 
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()

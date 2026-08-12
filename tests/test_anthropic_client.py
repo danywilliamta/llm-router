@@ -158,6 +158,82 @@ def test_build_kwargs_does_not_mutate_history_argument():
     assert history == [{"role": "user", "content": "premier"}]
 
 
+def test_build_kwargs_without_images_keeps_plain_string_content():
+    kwargs = anthropic_client._build_kwargs(
+        user_prompt="hi",
+        system_prompt="",
+        model="claude-x",
+        max_tokens=100,
+        use_thinking=False,
+        cache_system=True,
+        images=None,
+    )
+    assert kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_build_kwargs_with_images_wraps_content_in_blocks():
+    kwargs = anthropic_client._build_kwargs(
+        user_prompt="decris cette image",
+        system_prompt="",
+        model="claude-x",
+        max_tokens=100,
+        use_thinking=False,
+        cache_system=True,
+        images=[(b"fake-bytes", "image/png")],
+    )
+    content = kwargs["messages"][0]["content"]
+    assert content == [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "ZmFrZS1ieXRlcw==",  # base64("fake-bytes")
+            },
+        },
+        {"type": "text", "text": "decris cette image"},
+    ]
+
+
+def test_build_kwargs_with_multiple_images_preserves_order():
+    kwargs = anthropic_client._build_kwargs(
+        user_prompt="compare",
+        system_prompt="",
+        model="claude-x",
+        max_tokens=100,
+        use_thinking=False,
+        cache_system=True,
+        images=[(b"one", "image/png"), (b"two", "image/jpeg")],
+    )
+    content = kwargs["messages"][0]["content"]
+    assert [b["source"]["media_type"] for b in content[:2]] == ["image/png", "image/jpeg"]
+    assert content[2] == {"type": "text", "text": "compare"}
+
+
+def test_build_kwargs_images_go_in_same_message_as_history():
+    # Les rôles doivent alterner strictement côté API Anthropic — les images
+    # doivent rejoindre le nouveau message utilisateur, jamais former un
+    # message "user" séparé qui suivrait un message "user" de l'historique.
+    history = [
+        {"role": "user", "content": "premier message"},
+        {"role": "assistant", "content": "premiere reponse"},
+    ]
+    kwargs = anthropic_client._build_kwargs(
+        user_prompt="deuxieme message",
+        system_prompt="",
+        model="claude-x",
+        max_tokens=100,
+        use_thinking=False,
+        cache_system=True,
+        history=history,
+        images=[(b"img", "image/png")],
+    )
+    assert len(kwargs["messages"]) == 3
+    assert kwargs["messages"][:2] == history
+    assert kwargs["messages"][2]["role"] == "user"
+    assert isinstance(kwargs["messages"][2]["content"], list)
+
+
 # ---------------------------------------------------------------------------
 # complete
 # ---------------------------------------------------------------------------
@@ -209,6 +285,23 @@ async def test_complete_forwards_build_kwargs_output_to_stream():
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["system"][0]["text"] == "ctx"
     assert captured["messages"] == [{"role": "user", "content": "salut"}]
+
+
+@pytest.mark.asyncio
+async def test_complete_forwards_images_to_stream():
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    captured: dict = {}
+    anthropic_client._client = _fake_client_with_message(message, captured)
+
+    await anthropic_client.complete(
+        user_prompt="decris cette image",
+        images=[(b"fake-bytes", "image/png")],
+    )
+
+    content = captured["messages"][0]["content"]
+    assert content[0]["type"] == "image"
+    assert content[0]["source"]["media_type"] == "image/png"
+    assert content[-1] == {"type": "text", "text": "decris cette image"}
 
 
 # ---------------------------------------------------------------------------
