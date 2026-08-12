@@ -221,20 +221,78 @@ async def test_llm_complete_structured_dispatches_to_anthropic(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_complete_structured_openai_not_implemented():
-    with pytest.raises(NotImplementedError):
+async def test_llm_complete_structured_dispatches_to_openai(monkeypatch):
+    mock_structured = AsyncMock(return_value={"nom": "Alice"})
+    monkeypatch.setattr(openai_client, "complete_structured", mock_structured)
+
+    schema = {"type": "object", "properties": {"nom": {"type": "string"}}}
+    result = await router_mod.llm_complete_structured(
+        user_prompt="extrait le nom",
+        input_schema=schema,
+        provider_override="openai",
+    )
+
+    assert result == {"nom": "Alice"}
+    mock_structured.assert_awaited_once()
+    _, kwargs = mock_structured.call_args
+    assert kwargs["input_schema"] == schema
+    assert kwargs["model"] is None
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_structured_env_provider_openai_dispatches(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    mock_structured = AsyncMock(return_value={})
+    monkeypatch.setattr(openai_client, "complete_structured", mock_structured)
+
+    result = await router_mod.llm_complete_structured(user_prompt="x", input_schema={})
+
+    assert result == {}
+    mock_structured.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_structured_forwards_model_to_openai(monkeypatch):
+    mock_structured = AsyncMock(return_value={})
+    monkeypatch.setattr(openai_client, "complete_structured", mock_structured)
+
+    await router_mod.llm_complete_structured(
+        user_prompt="x",
+        input_schema={},
+        provider_override="openai",
+        model="gpt-4o-2024-08-06",
+    )
+
+    _, kwargs = mock_structured.call_args
+    assert kwargs["model"] == "gpt-4o-2024-08-06"
+
+
+@pytest.mark.asyncio
+async def test_llm_complete_structured_model_param_rejected_for_anthropic():
+    with pytest.raises(ValueError, match="anthropic"):
         await router_mod.llm_complete_structured(
             user_prompt="x",
             input_schema={},
-            provider_override="openai",
+            provider_override="anthropic",
+            model="claude-something",
         )
 
 
 @pytest.mark.asyncio
-async def test_llm_complete_structured_env_provider_openai_not_implemented(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    with pytest.raises(NotImplementedError):
-        await router_mod.llm_complete_structured(user_prompt="x", input_schema={})
+async def test_llm_complete_structured_forwards_usage_context_to_openai(monkeypatch):
+    mock_structured = AsyncMock(return_value={})
+    monkeypatch.setattr(openai_client, "complete_structured", mock_structured)
+    context = {"agent_id": "brand_brain_importer"}
+
+    await router_mod.llm_complete_structured(
+        user_prompt="x",
+        input_schema={},
+        provider_override="openai",
+        usage_context=context,
+    )
+
+    _, kwargs = mock_structured.call_args
+    assert kwargs["usage_context"] == context
 
 
 # ---------------------------------------------------------------------------

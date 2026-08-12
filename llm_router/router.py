@@ -145,35 +145,53 @@ async def llm_complete_structured(
     history: list[dict] | None = None,
     provider_override: str | None = None,
     usage_context: dict | None = None,
+    model: str | None = None,
 ) -> dict:
     """Équivalent structuré de `llm_complete` : réponse JSON validée par schéma
-    via les structured outputs natifs de l'API Anthropic (`output_config.format`)
-    — voir `anthropic_client.complete_structured`. Anthropic uniquement pour
-    l'instant (pas câblé côté OpenAI dans ce package) — échoue explicitement
-    plutôt que de silencieusement retomber sur un comportement différent.
+    via les structured outputs natifs du provider actif — `output_config.format`
+    côté Anthropic (`anthropic_client.complete_structured`), `response_format`
+    json_schema strict côté OpenAI (`openai_llm_client.complete_structured`).
 
-    Pas de paramètre `model` : `anthropic_client.complete_structured` fixe le
-    modèle en dur (Haiku 4.5) — `output_config.format` n'est supporté que par
-    une liste restreinte de modèles Anthropic, et Haiku 4.5 couvre tous les
-    usages actuels de cette fonction.
+    `model` : ignoré (doit rester `None`, sinon `ValueError`) sous
+    provider='anthropic' — `anthropic_client.complete_structured` fixe le
+    modèle en dur (Haiku 4.5) car `output_config.format` n'est supporté que
+    par une liste restreinte de modèles Anthropic. Sous provider='openai',
+    transmis tel quel à `openai_llm_client.complete_structured` (défaut
+    `openai_llm_client.STRUCTURED_MODEL` si omis) — le mode strict JSON
+    schema d'OpenAI n'a pas cette restriction.
+
+    `cache_system` : Anthropic uniquement (prompt caching), ignoré côté OpenAI
+    (pas de paramètre équivalent dans son client structuré).
 
     `usage_context` : voir `llm_complete` — transmis tel quel au hook de
     tracking optionnel (`llm_router.usage.set_usage_hook`).
     """
     provider = _get_provider(provider_override)
 
-    if provider != "anthropic":
-        raise NotImplementedError(
-            f"llm_complete_structured non implémenté pour provider='{provider}' (Anthropic uniquement)"
+    if provider == "anthropic":
+        if model is not None:
+            raise ValueError(
+                "llm_complete_structured(model=...) non supporté pour provider='anthropic' "
+                "— le modèle est fixé en dur (voir anthropic_client.STRUCTURED_MODEL)"
+            )
+        from llm_router import anthropic_client
+        return await anthropic_client.complete_structured(
+            user_prompt=user_prompt,
+            input_schema=input_schema,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+            cache_system=cache_system,
+            history=history,
+            usage_context=usage_context,
         )
 
-    from llm_router import anthropic_client
-    return await anthropic_client.complete_structured(
+    from llm_router import openai_llm_client
+    return await openai_llm_client.complete_structured(
         user_prompt=user_prompt,
         input_schema=input_schema,
         system_prompt=system_prompt,
+        model=model,
         max_tokens=max_tokens,
-        cache_system=cache_system,
         history=history,
         usage_context=usage_context,
     )
